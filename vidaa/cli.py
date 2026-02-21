@@ -36,10 +36,12 @@ def create_tv_client(tv_id: Optional[str] = None, ip: Optional[str] = None) -> V
         Configured VidaaTV client
     """
     if ip:
-        # Direct IP override - use defaults for other settings
+        # Direct IP override - resolve MAC for dynamic auth
+        mac_address = get_mac_from_ip(ip)
         return VidaaTV(
             host=ip,
             port=DEFAULT_PORT,
+            mac_address=mac_address,
             use_dynamic_auth=True,
             brand="his",
         )

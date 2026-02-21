@@ -98,6 +98,8 @@ def get_mac_from_ip(ip: str) -> Optional[str]:
     import subprocess
     import re
 
+    mac_pattern = r"([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}"
+
     try:
         # Ping first to populate ARP cache
         subprocess.run(
@@ -105,22 +107,34 @@ def get_mac_from_ip(ip: str) -> Optional[str]:
             capture_output=True,
             timeout=3
         )
+    except Exception:
+        pass
 
-        # Check ARP table
+    # Try 'ip neigh' first (available on modern Linux)
+    try:
+        result = subprocess.run(
+            ["ip", "neigh", "show", ip],
+            capture_output=True,
+            text=True,
+            timeout=3
+        )
+        match = re.search(mac_pattern, result.stdout)
+        if match:
+            return match.group(0).upper().replace("-", ":")
+    except Exception:
+        pass
+
+    # Fallback to 'arp -n'
+    try:
         result = subprocess.run(
             ["arp", "-n", ip],
             capture_output=True,
             text=True,
             timeout=3
         )
-
-        # Parse MAC from output
-        # Format: "10.0.0.125  ether  XX:XX:XX:XX:XX:XX  C  eth0"
-        mac_pattern = r"([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}"
         match = re.search(mac_pattern, result.stdout)
         if match:
             return match.group(0).upper().replace("-", ":")
-
     except Exception:
         pass
 

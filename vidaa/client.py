@@ -278,7 +278,12 @@ class VidaaTV:
         if not self._storage:
             return None
 
-        token_data = self._storage.get_token(self.host, self.port)
+        # Try MAC as device_id first, then fall back to host:port
+        token_data = self._storage.get_token(
+            device_id=self.mac_address,
+            host=self.host,
+            port=self.port,
+        )
         if not token_data:
             return None
 
@@ -292,7 +297,11 @@ class VidaaTV:
             return None
 
         # Get token status
-        status = self._storage.get_token_status(self.host, self.port)
+        status = self._storage.get_token_status(
+            device_id=self.mac_address,
+            host=self.host,
+            port=self.port,
+        )
 
         return {
             "client_id": client_id,
@@ -568,12 +577,20 @@ class VidaaTV:
             self._last_response = {"raw": msg.payload.decode()}
             self._response_event.set()
 
-    def _handle_auth_response(self, payload: dict):
+    def _handle_auth_response(self, payload):
         """Handle authentication response from TV.
 
         Args:
-            payload: Authentication response payload
+            payload: Authentication response payload (dict or str)
         """
+        # TV sometimes sends a bare JSON string; parse if needed
+        if isinstance(payload, str):
+            try:
+                payload = json.loads(payload)
+            except (json.JSONDecodeError, TypeError):
+                _LOGGER.debug("Auth response is non-JSON string: %s", payload)
+                return
+
         # Check for PIN accepted (result: 1 from authenticationcode)
         if payload.get("result") == 1:
             # PIN was accepted, mark as authenticated
@@ -605,7 +622,9 @@ class VidaaTV:
             # Save full credentials if persistence enabled
             # Important: mqtt_username and client_id are needed for reconnection
             if self._storage:
+                device_id = self.mac_address or self.host
                 self._storage.save_token(
+                    device_id=device_id,
                     host=self.host,
                     port=self.port,
                     access_token=access_token,
@@ -939,21 +958,33 @@ class VidaaTV:
             Volume level (0-100) or None if failed
         """
         topic = get_topic(TOPIC_GET_VOLUME, self.client_id)
-        response = self._request(topic, timeout=timeout)
-        if response:
-            # Only use main speaker volume (volume_type 0)
-            volume_type = response.get("volume_type", 0)
-            if volume_type == 0:
-                for field in ["volume_value", "volume", "value"]:
-                    if field in response:
-                        try:
-                            vol = int(response[field])
-                            self._cached_volume = vol
-                            return vol
-                        except (ValueError, TypeError):
-                            pass
-            _LOGGER.debug("Volume response: type=%s, data=%s", volume_type, response)
-        # Return cached volume if direct request failed or wrong type
+        # TV sends two responses: mute status (type=2) then volume (type=0).
+        # Retry to catch the type=0 response if we get type=2 first.
+        deadline = time.time() + timeout
+        self._response_event.clear()
+        self._publish(topic)
+        while time.time() < deadline:
+            remaining = deadline - time.time()
+            if remaining <= 0:
+                break
+            if self._response_event.wait(timeout=remaining):
+                self._response_event.clear()
+                response = self._last_response
+                if response and isinstance(response, dict):
+                    volume_type = response.get("volume_type", 0)
+                    if volume_type == 0:
+                        for field in ["volume_value", "volume", "value"]:
+                            if field in response:
+                                try:
+                                    vol = int(response[field])
+                                    self._cached_volume = vol
+                                    return vol
+                                except (ValueError, TypeError):
+                                    pass
+                    _LOGGER.debug("Volume response: type=%s, data=%s", volume_type, response)
+            else:
+                break
+        # Return cached volume if direct request failed
         if self._cached_volume is not None:
             _LOGGER.debug("Using cached volume: %s", self._cached_volume)
             return self._cached_volume
