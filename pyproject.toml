@@ -1,0 +1,30 @@
+[build-system]
+requires = ["setuptools>=68.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "vidaa-control"
+version = "1.0.0"
+description = "Control Hisense VIDAA TVs via MQTT over TLS"
+readme = "README.md"
+license = {text = "MIT"}
+requires-python = ">=3.9"
+dependencies = [
+    "paho-mqtt>=1.6.0,<2.0",
+    "pyyaml>=6.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest",
+    "pytest-asyncio",
+]
+
+[project.scripts]
+tv = "vidaa.cli:main"
+
+[tool.setuptools.packages.find]
+include = ["vidaa*", "vidaa2mqtt*"]
+
+[tool.setuptools.package-data]
+vidaa = ["certs/*.pem", "certs/*.key"]
