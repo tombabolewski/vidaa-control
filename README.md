@@ -1,227 +1,115 @@
 # vidaa-control
 
-[![Python 3.8+](https://img.shields.io/badge/python-3.8+-blue.svg)](https://www.python.org/downloads/)
-[![hacs_badge](https://img.shields.io/badge/HACS-Custom-41BDF5.svg)](https://github.com/hacs/integration)
+[![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
-Python library and Home Assistant integration for Hisense/Vidaa Smart TV control. Two integration options available:
+Python library for controlling Hisense/Vidaa Smart TVs. Communicates directly with the TV's built-in MQTT-over-TLS broker — no cloud, no external broker needed.
 
-1. **Custom Component** (Recommended) - Native Home Assistant integration with SSDP auto-discovery
-2. **MQTT Bridge** - Docker-based bridge for MQTT-based home automation setups
+Used by the [ha-vidaa-tv](https://github.com/tombabolewski/ha-vidaa-tv) Home Assistant integration.
 
 ## Features
 
-- **Home Assistant Custom Component** with config flow UI
-- **SSDP Auto-Discovery** - TVs automatically detected on network
-- **PIN Pairing** - Secure authentication via TV screen
-- Control Hisense/Vidaa TVs via MQTT (optional bridge mode)
-- Power on/off (with Wake-on-LAN support)
-- Volume control and mute
-- Input source switching
-- App launching (Netflix, YouTube, etc.)
-- Navigation keys (up, down, left, right, ok, back, home, menu)
-- Multi-TV support
-- Docker deployment ready (MQTT bridge)
+- **Direct SSL connection** to the TV's built-in broker (port 36669)
+- **Auto-discovery** via SSDP and UDP broadcast
+- **PIN pairing** — authenticate via TV screen, tokens persisted automatically
+- **Protocol detection** — supports modern, middle, and legacy Vidaa firmware
+- **48 remote keys** — power, navigation, playback, numbers, colors, etc.
+- **Volume control** — get/set/mute with state tracking
+- **Input source switching** — HDMI, TV, AV, Component
+- **App launching** — Netflix, YouTube, Prime Video, Disney+, and more
+- **Wake-on-LAN** — power on from standby
+- **Sync and async clients** — `VidaaTV` and `AsyncVidaaTV`
+- **CLI tool** — `vidaa` command for interactive control
+
+## Installation
+
+```bash
+pip install git+https://github.com/tombabolewski/vidaa-control.git
+```
 
 ## Quick Start
 
-### 1. Prerequisites
-
-- **Paired UUID**: You must first pair a device with your TV using the official Vidaa app
-- **TV IP Address**: Your TV's IP address (static IP recommended)
-- **MQTT Broker**: Mosquitto or Home Assistant's built-in broker
-- **Docker** (recommended) or Python 3.8+
-
-### 2. Configure
-
-Copy the example config and edit:
+### CLI
 
 ```bash
-cp config.example.yaml config.yaml
-nano config.yaml
+# Discover TVs on the network
+vidaa discover
+
+# Pair with a TV (shows PIN on TV screen)
+vidaa pair 192.168.1.225
+
+# Send commands
+vidaa key home
+vidaa volume 25
+vidaa launch netflix
+vidaa source hdmi1
 ```
 
-Minimum required settings:
-
-```yaml
-mqtt:
-  host: "192.168.1.100"    # Your MQTT broker IP
-
-tv:
-  host: "YOUR_TV_IP"       # Your TV's IP address
-  uuid: "xx:xx:xx:xx:xx:xx" # UUID from Vidaa app pairing
-  mac: "XX:XX:XX:XX:XX:XX"  # TV MAC for Wake-on-LAN
-  name: "Living Room TV"
-```
-
-### 3. Run with Docker
-
-```bash
-docker compose up -d
-```
-
-View logs:
-
-```bash
-docker compose logs -f
-```
-
-### 4. Home Assistant
-
-The TV will automatically appear in Home Assistant via MQTT discovery. You'll get:
-
-- **Media Player** entity with power, volume, source controls
-- **Navigation Buttons** for remote control
-- **App Launcher** select for streaming apps
-
-## Manual Installation
-
-If not using Docker:
-
-```bash
-# Install dependencies
-pip install -r requirements.txt
-
-# Run
-python -m vidaa2mqtt --config config.yaml
-```
-
-## Configuration
-
-See [docs/CONFIGURATION.md](docs/CONFIGURATION.md) for full configuration reference.
-
-### Environment Variables
-
-Override config via environment:
-
-| Variable | Description |
-|----------|-------------|
-| `MQTT_HOST` | MQTT broker hostname |
-| `MQTT_PORT` | MQTT broker port |
-| `MQTT_USERNAME` | MQTT username |
-| `MQTT_PASSWORD` | MQTT password |
-| `TV_HOST` | TV IP address |
-| `TV_UUID` | Paired UUID |
-| `TV_MAC` | TV MAC address |
-| `LOG_LEVEL` | Logging level |
-
-## MQTT Topics
-
-### Commands (publish to these)
-
-| Topic | Payload | Description |
-|-------|---------|-------------|
-| `vidaa2mqtt/{id}/set/power` | `ON` / `OFF` | Power control |
-| `vidaa2mqtt/{id}/set/volume` | `0-100` | Set volume |
-| `vidaa2mqtt/{id}/set/mute` | `ON` / `OFF` | Toggle mute |
-| `vidaa2mqtt/{id}/set/source` | `hdmi1`, `hdmi2`, etc. | Change input |
-| `vidaa2mqtt/{id}/set/key` | `up`, `down`, `ok`, etc. | Send remote key |
-| `vidaa2mqtt/{id}/set/app` | `netflix`, `youtube`, etc. | Launch app |
-
-### State (subscribe to these)
-
-| Topic | Payload | Description |
-|-------|---------|-------------|
-| `vidaa2mqtt/{id}/state/power` | `ON` / `OFF` | Power state |
-| `vidaa2mqtt/{id}/state/volume` | `0-100` | Current volume |
-| `vidaa2mqtt/{id}/state/mute` | `ON` / `OFF` | Mute state |
-| `vidaa2mqtt/{id}/state/source` | Source name | Current input |
-| `vidaa2mqtt/{id}/state/available` | `online` / `offline` | Availability |
-
-## Getting the UUID
-
-The UUID is required for authentication. To get it:
-
-1. Install the official **Vidaa** app on your phone
-2. Pair the app with your TV (enter the PIN shown on TV)
-3. The UUID is your phone's Bluetooth/WiFi MAC address
-4. Check your phone's settings or use `adb logcat` to find it
-
-Alternatively, if you have a working UUID from previous pairing, use that.
-
-## Wake-on-LAN
-
-To turn on the TV when it's off:
-
-1. Enable "Wake on LAN" or "Network Standby" in TV settings
-2. Set `tv.mac` in config to your TV's MAC address
-3. Connect TV via Ethernet (WiFi WoL is unreliable)
-4. Set `options.wake_on_lan: true`
-
-## Troubleshooting
-
-See [docs/TROUBLESHOOTING.md](docs/TROUBLESHOOTING.md) for common issues.
-
-### Quick Fixes
-
-**TV not responding:**
-- Ensure TV is on the same network
-- Check TV IP address is correct
-- Verify UUID is from a paired device
-
-**Discovery not appearing in HA:**
-- Check MQTT broker connection in HA
-- Verify discovery_prefix matches HA config
-- Check logs: `docker compose logs vidaa2mqtt`
-
-**Wake-on-LAN not working:**
-- TV must be connected via Ethernet
-- Enable WoL in TV settings
-- Verify MAC address is correct
-
-## Library Usage
-
-Install the library:
-
-```bash
-pip install vidaa-control
-```
-
-Basic usage:
+### Python (sync)
 
 ```python
-from vidaa import VidaaTV, discover_all
+from vidaa import VidaaTV
 
-# Discover TVs on network
-devices = discover_all(timeout=5.0)
-for ip, device in devices.items():
-    print(f"Found: {ip} - {device.name}")
-
-# Connect to TV
 tv = VidaaTV(
-    host="YOUR_TV_IP",
-    mac_address="XX:XX:XX:XX:XX:XX",
+    host="192.168.1.225",
+    mac_address="AA:BB:CC:DD:EE:FF",
     use_dynamic_auth=True,
 )
 
 if tv.connect():
-    # Control TV
     tv.power_on()
-    tv.volume_up()
+    tv.set_volume(25)
     tv.launch_app("netflix")
-
     tv.disconnect()
 ```
 
-See [docs/API.md](docs/API.md) for full API reference.
+### Python (async)
 
-## Documentation
+```python
+from vidaa import AsyncVidaaTV
+from vidaa.config import TokenStorage
 
-- [API Reference](docs/API.md)
-- [Configuration Reference](docs/CONFIGURATION.md)
-- [Home Assistant Integration](docs/HOME_ASSISTANT.md)
-- [MQTT Topics](docs/MQTT_TOPICS.md)
-- [Troubleshooting](docs/TROUBLESHOOTING.md)
-- [Protocol Analysis](docs/PROTOCOL.md)
+tv = AsyncVidaaTV(
+    host="192.168.1.225",
+    mac_address="AA:BB:CC:DD:EE:FF",
+    use_dynamic_auth=True,
+    enable_persistence=True,
+    storage=TokenStorage("tokens.json"),
+)
 
-## Contributing
+if await tv.async_connect():
+    state = await tv.async_get_state()
+    volume = await tv.async_get_volume()
+    await tv.async_launch_app("youtube")
+    await tv.async_disconnect()
+```
 
-Contributions are welcome! See [CONTRIBUTING.md](CONTRIBUTING.md) for guidelines.
+## Remote Keys
+
+48 keys available via `send_key()` / `async_send_key()`:
+
+| Category | Keys |
+|----------|------|
+| Power | `KEY_POWER` |
+| Navigation | `KEY_UP`, `KEY_DOWN`, `KEY_LEFT`, `KEY_RIGHT`, `KEY_OK`, `KEY_BACK`, `KEY_MENU`, `KEY_HOME`, `KEY_EXIT` |
+| Volume | `KEY_VOLUME_UP`, `KEY_VOLUME_DOWN`, `KEY_MUTE` |
+| Channel | `KEY_CHANNEL_UP`, `KEY_CHANNEL_DOWN` |
+| Playback | `KEY_PLAY`, `KEY_PAUSE`, `KEY_STOP`, `KEY_FAST_FORWARD`, `KEY_REWIND` |
+| Numbers | `KEY_0` through `KEY_9` |
+| Colors | `KEY_RED`, `KEY_GREEN`, `KEY_YELLOW`, `KEY_BLUE` |
+| Extras | `KEY_INFO`, `KEY_SUBTITLE` |
+
+## Protocol
+
+Communication uses MQTT over TLS on port 36669. The library bundles the required client certificates. Authentication is handled automatically:
+
+1. **Discovery** — SSDP or UDP broadcast finds TVs
+2. **Protocol detection** — HTTP probe determines firmware generation
+3. **Pairing** — TV displays PIN, client authenticates
+4. **Token persistence** — auth tokens stored for reconnection
+
+See [docs/PROTOCOL.md](docs/PROTOCOL.md) for the full protocol analysis.
 
 ## License
 
-This project is licensed under the MIT License - see the [LICENSE](LICENSE) file for details.
-
-## Credits
-
-Protocol reverse-engineered from the Vidaa Android app.
+MIT
