@@ -583,7 +583,10 @@ def cmd_monitor(args):
         except Exception as e:
             print(f"Error processing message: {e}")
 
-    client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311)
+    _cli_mqtt_kwargs: dict = {}
+    if hasattr(mqtt, "CallbackAPIVersion"):
+        _cli_mqtt_kwargs["callback_api_version"] = mqtt.CallbackAPIVersion.VERSION1
+    client = mqtt.Client(client_id=client_id, protocol=mqtt.MQTTv311, **_cli_mqtt_kwargs)
     client.username_pw_set(username, password)
     client.on_connect = on_connect
     client.on_subscribe = on_subscribe

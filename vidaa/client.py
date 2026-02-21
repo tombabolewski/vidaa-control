@@ -17,6 +17,11 @@ import paho.mqtt.client as mqtt
 
 _LOGGER = logging.getLogger(__name__)
 
+# paho-mqtt v2 compat: use VERSION1 callback API if available
+_MQTT_CLIENT_KWARGS: dict = {}
+if hasattr(mqtt, "CallbackAPIVersion"):
+    _MQTT_CLIENT_KWARGS["callback_api_version"] = mqtt.CallbackAPIVersion.VERSION1
+
 from .config import (
     DEFAULT_PORT,
     DEFAULT_MQTT_USERNAME,
@@ -232,7 +237,8 @@ class VidaaTV:
             client_id=self._mqtt_client_id,
             clean_session=True,
             protocol=mqtt.MQTTv311,
-            transport="tcp"
+            transport="tcp",
+            **_MQTT_CLIENT_KWARGS,
         )
         self._client.on_connect = self._on_connect
         self._client.on_disconnect = self._on_disconnect
@@ -429,7 +435,8 @@ class VidaaTV:
                 client_id=self._mqtt_client_id,
                 clean_session=True,
                 protocol=mqtt.MQTTv311,
-                transport="tcp"
+                transport="tcp",
+                **_MQTT_CLIENT_KWARGS,
             )
             self._client.on_connect = self._on_connect
             self._client.on_disconnect = self._on_disconnect
