@@ -1,5 +1,6 @@
 # vidaa-control
 
+[![PyPI](https://img.shields.io/pypi/v/vidaa-control)](https://pypi.org/project/vidaa-control/)
 [![Python 3.9+](https://img.shields.io/badge/python-3.9+-blue.svg)](https://www.python.org/downloads/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
@@ -24,7 +25,7 @@ Used by the [ha-vidaa-tv](https://github.com/tombabolewski/ha-vidaa-tv) Home Ass
 ## Installation
 
 ```bash
-pip install git+https://github.com/tombabolewski/vidaa-control.git
+pip install vidaa-control
 ```
 
 ## Quick Start
