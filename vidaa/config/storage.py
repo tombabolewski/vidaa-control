@@ -6,6 +6,7 @@ Supports backwards compatibility with host:port keys from legacy storage.
 
 import json
 import logging
+import os
 import time
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -48,6 +49,11 @@ class TokenStorage:
         self._ensure_storage_dir()
         with open(self.storage_path, "w") as f:
             json.dump(data, f, indent=2)
+        # Restrict file permissions to owner-only (tokens are sensitive)
+        try:
+            os.chmod(self.storage_path, 0o600)
+        except OSError:
+            pass
 
     def _find_token(self, device_id: Optional[str] = None, host: Optional[str] = None, port: int = DEFAULT_PORT) -> tuple:
         """Find token by device_id or host:port.
@@ -297,6 +303,50 @@ class TokenStorage:
             })
 
         return devices
+
+    def get_cached_protocol_version(
+        self,
+        device_id: Optional[str] = None,
+        host: Optional[str] = None,
+        port: int = DEFAULT_PORT,
+    ) -> Optional[int]:
+        """Get cached protocol version for a device (ignoring token expiry).
+
+        Returns:
+            Protocol version int, or None if not cached.
+        """
+        _, token_data = self._find_token(device_id, host, port)
+        if token_data:
+            return token_data.get("protocol_version")
+        return None
+
+    def get_cert_fingerprint(
+        self,
+        device_id: Optional[str] = None,
+        host: Optional[str] = None,
+        port: int = DEFAULT_PORT,
+    ) -> Optional[str]:
+        """Get stored TLS certificate fingerprint for a device.
+
+        Returns:
+            SHA-256 fingerprint hex string, or None if not stored.
+        """
+        _, token_data = self._find_token(device_id, host, port)
+        if token_data:
+            return token_data.get("cert_fingerprint")
+        return None
+
+    def save_cert_fingerprint(
+        self,
+        fingerprint: str,
+        device_id: Optional[str] = None,
+        host: Optional[str] = None,
+        port: int = DEFAULT_PORT,
+    ):
+        """Store TLS certificate fingerprint for a device."""
+        key, token_data = self._find_token(device_id, host, port)
+        if key:
+            self.update_token(key, cert_fingerprint=fingerprint)
 
     def clear_all(self):
         """Clear all stored tokens."""

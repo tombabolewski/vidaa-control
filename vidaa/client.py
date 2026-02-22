@@ -4,6 +4,7 @@ Provides control of Hisense/Vidaa TVs via MQTT over SSL/TLS.
 Supports authentication, remote control, volume, sources, and apps.
 """
 
+import hashlib
 import json
 import logging
 import os
@@ -136,17 +137,27 @@ class VidaaTV:
         self._protocol_version: Optional[int] = None
         self._auto_detect_protocol = auto_detect_protocol
 
+        # Token storage (initialised early so protocol cache check can use it)
+        self._storage = storage or (get_storage() if enable_persistence else None)
+
         # Auto-detect protocol if needed and dynamic auth is enabled
         if use_dynamic_auth and auth_method is None and auto_detect_protocol:
-            self._protocol_version = detect_protocol(host)
-            self._auth_method = get_auth_method(self._protocol_version)
-            if self._protocol_version is not None:
-                _LOGGER.info("Detected protocol version: %s -> %s", self._protocol_version, self._auth_method.value)
-            else:
-                _LOGGER.warning("Could not detect protocol. Using %s auth (will try fallback if fails)", self._auth_method.value)
+            # Check storage for a cached protocol version first (avoids HTTP request)
+            cached_pv = self._storage.get_cached_protocol_version(
+                device_id=mac_address, host=host, port=port,
+            ) if self._storage else None
 
-        # Token storage
-        self._storage = storage or (get_storage() if enable_persistence else None)
+            if cached_pv is not None:
+                self._protocol_version = cached_pv
+                self._auth_method = get_auth_method(cached_pv)
+                _LOGGER.debug("Using cached protocol version: %s -> %s", cached_pv, self._auth_method.value)
+            else:
+                self._protocol_version = detect_protocol(host)
+                self._auth_method = get_auth_method(self._protocol_version)
+                if self._protocol_version is not None:
+                    _LOGGER.info("Detected protocol version: %s -> %s", self._protocol_version, self._auth_method.value)
+                else:
+                    _LOGGER.warning("Could not detect protocol. Using %s auth (will try fallback if fails)", self._auth_method.value)
         self._access_token: Optional[str] = None
         self._authenticated = False
         self._auth_required = False
@@ -500,11 +511,53 @@ class VidaaTV:
         self._client.disconnect()
         self._connected = False
 
+    def _verify_server_cert_tofu(self):
+        """Trust-On-First-Use server certificate verification.
+
+        On first connection, stores the TV's TLS certificate SHA-256 fingerprint.
+        On subsequent connections, warns if the fingerprint has changed (possible
+        MITM or firmware update).
+        """
+        try:
+            sock = self._client.socket()
+            if not isinstance(sock, ssl.SSLSocket):
+                return
+
+            der_cert = sock.getpeercert(binary_form=True)
+            if not der_cert:
+                return
+
+            fingerprint = hashlib.sha256(der_cert).hexdigest()
+
+            if self._storage:
+                stored_fp = self._storage.get_cert_fingerprint(
+                    device_id=self.mac_address, host=self.host, port=self.port,
+                )
+                if stored_fp and stored_fp != fingerprint:
+                    _LOGGER.warning(
+                        "TV certificate fingerprint changed! "
+                        "This could indicate a MITM attack or TV firmware update. "
+                        "Stored: %s..., Got: %s...",
+                        stored_fp[:16], fingerprint[:16],
+                    )
+                elif not stored_fp:
+                    self._storage.save_cert_fingerprint(
+                        fingerprint,
+                        device_id=self.mac_address, host=self.host, port=self.port,
+                    )
+                    _LOGGER.debug("Stored server certificate fingerprint (TOFU)")
+        except Exception as err:
+            _LOGGER.debug("Could not verify server certificate: %s", err)
+
     def _on_connect(self, client, userdata, flags, rc):
         """Handle connection callback."""
         if rc == 0:
             self._connected = True
             _LOGGER.info("Connected to TV at %s:%s", self.host, self.port)
+
+            # TOFU: verify/store server certificate fingerprint
+            self._verify_server_cert_tofu()
+
             # Subscribe to response topics
             self._client.subscribe(TOPIC_STATE_RESPONSE)
             self._client.subscribe(TOPIC_VOLUME_RESPONSE)

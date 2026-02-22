@@ -4,11 +4,27 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "vidaa-control"
-version = "1.0.0"
+version = "1.1.0"
 description = "Control Hisense VIDAA TVs via MQTT over TLS"
 readme = "README.md"
-license = {text = "MIT"}
+license = "MIT"
 requires-python = ">=3.9"
+authors = [
+    {name = "Tom Babolewski", email = "tombabolewski@gmail.com"},
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Developers",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Home Automation",
+    "Topic :: Software Development :: Libraries :: Python Modules",
+]
+keywords = ["hisense", "vidaa", "tv", "mqtt", "home-automation", "smart-tv"]
 dependencies = [
     "paho-mqtt>=1.6.0",
     "pyyaml>=6.0",
@@ -20,11 +36,17 @@ dev = [
     "pytest-asyncio",
 ]
 
+[project.urls]
+Homepage = "https://github.com/tombabolewski/vidaa-control"
+Repository = "https://github.com/tombabolewski/vidaa-control"
+"Bug Tracker" = "https://github.com/tombabolewski/vidaa-control/issues"
+
 [project.scripts]
 tv = "vidaa.cli:main"
 
 [tool.setuptools.packages.find]
-include = ["vidaa*", "vidaa2mqtt*"]
+include = ["vidaa*"]
+exclude = ["vidaa2mqtt*"]
 
 [tool.setuptools.package-data]
 vidaa = ["certs/*.pem", "certs/*.key"]
