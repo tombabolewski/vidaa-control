@@ -1329,6 +1329,11 @@ class VidaaTV:
         return self._publish(topic, app_data)
 
     @property
+    def auth_method(self) -> Optional[AuthMethod]:
+        """Current authentication method."""
+        return self._auth_method
+
+    @property
     def is_connected(self) -> bool:
         """Check if connected to TV."""
         return self._connected
