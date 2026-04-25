@@ -678,7 +678,7 @@ class VidaaTV:
             elif "/volume" in msg.topic or "volumechange" in msg.topic:
                 _LOGGER.debug("Volume response on %s: %s", msg.topic, payload)
                 volume_type = payload.get("volume_type", 0)
-                if volume_type == 0:  # Main speaker volume
+                if volume_type in (0, 1):  # 0=main speaker, 1=used by some Hisense models
                     for field in ["volume_value", "volume", "value"]:
                         if field in payload:
                             try:
@@ -1104,7 +1104,7 @@ class VidaaTV:
                 response = self._last_response
                 if response and isinstance(response, dict):
                     volume_type = response.get("volume_type", 0)
-                    if volume_type == 0:
+                    if volume_type in (0, 1):
                         for field in ["volume_value", "volume", "value"]:
                             if field in response:
                                 try:
