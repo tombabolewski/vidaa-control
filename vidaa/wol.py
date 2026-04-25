@@ -98,7 +98,8 @@ def get_mac_from_ip(ip: str) -> Optional[str]:
     import subprocess
     import re
 
-    mac_pattern = r"([0-9a-fA-F]{2}[:-]){5}[0-9a-fA-F]{2}"
+    # macOS arp omits leading zeros (e.g. "c4:8:26:f5:40:65") so match 1-2 digits
+    mac_pattern = r"([0-9a-fA-F]{1,2}[:-]){5}[0-9a-fA-F]{1,2}"
 
     try:
         # Ping first to populate ARP cache
@@ -110,6 +111,10 @@ def get_mac_from_ip(ip: str) -> Optional[str]:
     except Exception:
         pass
 
+    def _normalise(raw: str) -> str:
+        """Ensure each octet is zero-padded to 2 digits."""
+        return ":".join(o.upper().zfill(2) for o in re.split(r"[:\-]", raw))
+
     # Try 'ip neigh' first (available on modern Linux)
     try:
         result = subprocess.run(
@@ -120,7 +125,7 @@ def get_mac_from_ip(ip: str) -> Optional[str]:
         )
         match = re.search(mac_pattern, result.stdout)
         if match:
-            return match.group(0).upper().replace("-", ":")
+            return _normalise(match.group(0))
     except Exception:
         pass
 
@@ -134,7 +139,7 @@ def get_mac_from_ip(ip: str) -> Optional[str]:
         )
         match = re.search(mac_pattern, result.stdout)
         if match:
-            return match.group(0).upper().replace("-", ":")
+            return _normalise(match.group(0))
     except Exception:
         pass
 
