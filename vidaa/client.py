@@ -1147,8 +1147,25 @@ class VidaaTV:
             return False
 
         level = max(0, min(100, level))
+
+        # Try direct MQTT changevolume first
         topic = get_topic(TOPIC_SET_VOLUME, self.client_id)
-        return self._publish(topic, str(level))
+        self._publish(topic, str(level))
+
+        # Verify it worked by checking cached volume after a short wait.
+        # If volume didn't change (e.g. audio is routed via HDMI ARC/eARC to an
+        # external soundbar), fall back to repeated key presses — CEC carries those
+        # through even when direct MQTT volume commands are ignored.
+        time.sleep(0.3)
+        current = self._cached_volume
+        if current is not None and abs(current - level) > 1:
+            delta = level - current
+            key = "KEY_VOLUMEUP" if delta > 0 else "KEY_VOLUMEDOWN"
+            for _ in range(abs(delta)):
+                self.send_key(key)
+                time.sleep(0.08)
+
+        return True
 
     # Source control
     def get_sources(self, timeout: float = 5.0) -> Optional[list]:
