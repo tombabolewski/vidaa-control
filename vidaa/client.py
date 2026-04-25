@@ -224,19 +224,23 @@ class VidaaTV:
         if not saved_creds:
             # No saved credentials - need to generate or use static
             if use_dynamic_auth and mac_address:
-                # Generate fresh credentials for new pairing
-                creds = generate_credentials(
-                    mac_address=mac_address,
-                    brand=brand,
-                    auth_method=self._auth_method,
-                )
+                # LEGACY protocol TVs (< 3000) reject all dynamic credentials.
+                # They only accept the hardcoded static creds from the factory app.
+                if self._auth_method == AuthMethod.LEGACY:
+                    creds = generate_credentials_static(mac_address)
+                    _LOGGER.debug("Using static auth (LEGACY protocol): client_id=%s...", creds.client_id[:30])
+                else:
+                    creds = generate_credentials(
+                        mac_address=mac_address,
+                        brand=brand,
+                        auth_method=self._auth_method,
+                    )
+                    auth_label = self._auth_method.value if self._auth_method else "auto"
+                    _LOGGER.debug("Using dynamic auth (%s): client_id=%s...", auth_label, creds.client_id[:30])
                 self._mqtt_client_id = creds.client_id
                 self._username = creds.username
                 self._password = creds.password
-                # Use MQTT client_id for topics during pairing as well
                 self.client_id = creds.client_id
-                auth_label = self._auth_method.value if self._auth_method else "auto"
-                _LOGGER.debug("Using dynamic auth (%s): client_id=%s...", auth_label, creds.client_id[:30])
             else:
                 # Use static credentials
                 self._mqtt_client_id = f"hisense_{client_id}_{int(time.time())}"
@@ -502,6 +506,74 @@ class VidaaTV:
                 except:
                     pass
 
+        # Final fallback: static credentials (hisenseservice/multimqttservice).
+        # LEGACY TVs always need these; also worth trying when protocol is unknown.
+        _LOGGER.info("Trying static (hisenseservice) authentication...")
+        creds = generate_credentials_static(self.mac_address)
+        self._mqtt_client_id = creds.client_id
+        self._username = creds.username
+        self._password = creds.password
+        self.client_id = creds.client_id
+        self._auth_method = AuthMethod.LEGACY
+
+        self._client = mqtt.Client(
+            client_id=self._mqtt_client_id,
+            clean_session=True,
+            protocol=mqtt.MQTTv311,
+            transport="tcp",
+            **_MQTT_CLIENT_KWARGS,
+        )
+        self._client.on_connect = self._on_connect
+        self._client.on_disconnect = self._on_disconnect
+        self._client.on_message = self._on_message
+
+        if self.use_ssl:
+            cert = self._CERTS_DIR / DEFAULT_CERT_FILENAME
+            key = self._CERTS_DIR / DEFAULT_KEY_FILENAME
+            if os.path.exists(cert) and os.path.exists(key):
+                self._client.username_pw_set(self._username, self._password)
+                self._client.tls_set(
+                    ca_certs=None,
+                    certfile=str(cert),
+                    keyfile=str(key),
+                    cert_reqs=ssl.CERT_NONE,
+                    tls_version=ssl.PROTOCOL_TLS,
+                )
+                self._client.tls_insecure_set(True)
+            else:
+                self._client.username_pw_set(self._username, self._password)
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                self._client.tls_set_context(context)
+        else:
+            self._client.username_pw_set(self._username, self._password)
+
+        try:
+            self._client.connect(self.host, self.port, keepalive=60)
+            self._client.loop_start()
+
+            start = time.time()
+            while not self._connected and (time.time() - start) < timeout:
+                time.sleep(0.1)
+
+            if self._connected:
+                _LOGGER.info("Connected successfully with static authentication!")
+                return True
+            else:
+                self._client.loop_stop()
+                try:
+                    self._client.disconnect()
+                except Exception:
+                    pass
+        except Exception as e:
+            _LOGGER.debug("  static auth failed: %s", e)
+            try:
+                self._client.loop_stop()
+                self._client.disconnect()
+            except Exception:
+                pass
+
         _LOGGER.error("All authentication methods failed")
         return False
 
@@ -606,7 +678,7 @@ class VidaaTV:
             elif "/volume" in msg.topic or "volumechange" in msg.topic:
                 _LOGGER.debug("Volume response on %s: %s", msg.topic, payload)
                 volume_type = payload.get("volume_type", 0)
-                if volume_type == 0:  # Main speaker volume
+                if volume_type in (0, 1):  # 0=main speaker, 1=used by some Hisense models
                     for field in ["volume_value", "volume", "value"]:
                         if field in payload:
                             try:
@@ -1032,7 +1104,7 @@ class VidaaTV:
                 response = self._last_response
                 if response and isinstance(response, dict):
                     volume_type = response.get("volume_type", 0)
-                    if volume_type == 0:
+                    if volume_type in (0, 1):
                         for field in ["volume_value", "volume", "value"]:
                             if field in response:
                                 try:
@@ -1075,8 +1147,25 @@ class VidaaTV:
             return False
 
         level = max(0, min(100, level))
+
+        # Try direct MQTT changevolume first
         topic = get_topic(TOPIC_SET_VOLUME, self.client_id)
-        return self._publish(topic, str(level))
+        self._publish(topic, str(level))
+
+        # Verify it worked by checking cached volume after a short wait.
+        # If volume didn't change (e.g. audio is routed via HDMI ARC/eARC to an
+        # external soundbar), fall back to repeated key presses — CEC carries those
+        # through even when direct MQTT volume commands are ignored.
+        time.sleep(0.3)
+        current = self._cached_volume
+        if current is not None and abs(current - level) > 1:
+            delta = level - current
+            key = "KEY_VOLUMEUP" if delta > 0 else "KEY_VOLUMEDOWN"
+            for _ in range(abs(delta)):
+                self.send_key(key)
+                time.sleep(0.08)
+
+        return True
 
     # Source control
     def get_sources(self, timeout: float = 5.0) -> Optional[list]:
@@ -1238,6 +1327,11 @@ class VidaaTV:
 
         topic = get_topic(TOPIC_LAUNCH_APP, self.client_id)
         return self._publish(topic, app_data)
+
+    @property
+    def auth_method(self) -> Optional[AuthMethod]:
+        """Current authentication method."""
+        return self._auth_method
 
     @property
     def is_connected(self) -> bool:

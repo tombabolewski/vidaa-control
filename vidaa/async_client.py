@@ -182,6 +182,17 @@ class AsyncVidaaTV:
         return self._init_kwargs["port"]
 
     @property
+    def auth_method(self) -> Optional["AuthMethod"]:
+        """Current authentication method (available after connect)."""
+        return self._client.auth_method if self._client else None
+
+    @property
+    def is_legacy_protocol(self) -> bool:
+        """True if TV uses LEGACY protocol (static credentials, no PIN pairing)."""
+        from .protocol import AuthMethod
+        return self.auth_method == AuthMethod.LEGACY
+
+    @property
     def is_connected(self) -> bool:
         """Check if connected to TV."""
         return self._client.is_connected if self._client else False
