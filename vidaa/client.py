@@ -506,6 +506,74 @@ class VidaaTV:
                 except:
                     pass
 
+        # Final fallback: static credentials (hisenseservice/multimqttservice).
+        # LEGACY TVs always need these; also worth trying when protocol is unknown.
+        _LOGGER.info("Trying static (hisenseservice) authentication...")
+        creds = generate_credentials_static(self.mac_address)
+        self._mqtt_client_id = creds.client_id
+        self._username = creds.username
+        self._password = creds.password
+        self.client_id = creds.client_id
+        self._auth_method = AuthMethod.LEGACY
+
+        self._client = mqtt.Client(
+            client_id=self._mqtt_client_id,
+            clean_session=True,
+            protocol=mqtt.MQTTv311,
+            transport="tcp",
+            **_MQTT_CLIENT_KWARGS,
+        )
+        self._client.on_connect = self._on_connect
+        self._client.on_disconnect = self._on_disconnect
+        self._client.on_message = self._on_message
+
+        if self.use_ssl:
+            cert = self._CERTS_DIR / DEFAULT_CERT_FILENAME
+            key = self._CERTS_DIR / DEFAULT_KEY_FILENAME
+            if os.path.exists(cert) and os.path.exists(key):
+                self._client.username_pw_set(self._username, self._password)
+                self._client.tls_set(
+                    ca_certs=None,
+                    certfile=str(cert),
+                    keyfile=str(key),
+                    cert_reqs=ssl.CERT_NONE,
+                    tls_version=ssl.PROTOCOL_TLS,
+                )
+                self._client.tls_insecure_set(True)
+            else:
+                self._client.username_pw_set(self._username, self._password)
+                context = ssl.create_default_context()
+                context.check_hostname = False
+                context.verify_mode = ssl.CERT_NONE
+                self._client.tls_set_context(context)
+        else:
+            self._client.username_pw_set(self._username, self._password)
+
+        try:
+            self._client.connect(self.host, self.port, keepalive=60)
+            self._client.loop_start()
+
+            start = time.time()
+            while not self._connected and (time.time() - start) < timeout:
+                time.sleep(0.1)
+
+            if self._connected:
+                _LOGGER.info("Connected successfully with static authentication!")
+                return True
+            else:
+                self._client.loop_stop()
+                try:
+                    self._client.disconnect()
+                except Exception:
+                    pass
+        except Exception as e:
+            _LOGGER.debug("  static auth failed: %s", e)
+            try:
+                self._client.loop_stop()
+                self._client.disconnect()
+            except Exception:
+                pass
+
         _LOGGER.error("All authentication methods failed")
         return False
 
