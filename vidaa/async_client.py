@@ -292,6 +292,24 @@ class AsyncVidaaTV:
             timeout=timeout,
         )
 
+    async def async_ensure_token_fresh(
+        self,
+        min_validity: int = 86400,
+        timeout: float = 10.0,
+    ) -> bool:
+        """Refresh access token if it expires within ``min_validity`` seconds.
+
+        Returns:
+            True if the access token is still valid or was refreshed
+        """
+        if not self._client:
+            return False
+        return await self._run_in_executor(
+            self._client.ensure_token_fresh,
+            min_validity=min_validity,
+            timeout=timeout,
+        )
+
     def needs_authentication(self) -> bool:
         """Check if TV is requesting authentication."""
         return self._client.needs_authentication() if self._client else False

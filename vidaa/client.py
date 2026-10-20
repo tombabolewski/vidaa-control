@@ -173,55 +173,14 @@ class VidaaTV:
         # Track if we need to refresh token after connecting
         self._pending_token_refresh = False
         self._refresh_token: Optional[str] = None
+        # True while the session uses credentials restored from storage
+        self._using_saved_credentials = False
+
+        self._certfile = certfile
+        self._keyfile = keyfile
 
         # Check for saved credentials first (after successful pairing)
-        saved_creds = self._load_saved_credentials()
-        if saved_creds:
-            if saved_creds.get("needs_reauth"):
-                # Both tokens expired - need fresh pairing
-                _LOGGER.info("Stored tokens expired. Need to re-authenticate.")
-                if use_dynamic_auth and mac_address:
-                    # Fall through to generate fresh credentials
-                    saved_creds = None
-                else:
-                    _LOGGER.warning("Cannot generate fresh credentials without mac_address")
-
-            elif saved_creds.get("needs_refresh"):
-                # Access token expired but refresh token valid
-                # Connect with refresh token, then refresh
-                self._mqtt_client_id = saved_creds["client_id"]
-                self._username = saved_creds["mqtt_username"]
-                # Use refresh token as password for initial connection
-                self._password = saved_creds["refresh_token"]
-                self._refresh_token = saved_creds["refresh_token"]
-                self._pending_token_refresh = True
-                self.client_id = saved_creds["client_id"]
-                # Restore auth method from saved credentials
-                if saved_creds.get("auth_method"):
-                    self._auth_method = AuthMethod(saved_creds["auth_method"])
-                if saved_creds.get("protocol_version"):
-                    self._protocol_version = saved_creds["protocol_version"]
-                hours_left = saved_creds.get("refresh_expires_in", 0) // 3600
-                _LOGGER.info("Access token expired. Will refresh (refresh token valid for %dh)...", hours_left)
-
-            elif saved_creds.get("access_token"):
-                # Valid access token - use it
-                self._mqtt_client_id = saved_creds["client_id"]
-                self._username = saved_creds["mqtt_username"]
-                self._password = saved_creds["access_token"]  # KEY: accesstoken as password!
-                self._access_token = saved_creds["access_token"]
-                self._refresh_token = saved_creds.get("refresh_token")
-                self._authenticated = True
-                self.client_id = saved_creds["client_id"]
-                # Restore auth method from saved credentials
-                if saved_creds.get("auth_method"):
-                    self._auth_method = AuthMethod(saved_creds["auth_method"])
-                if saved_creds.get("protocol_version"):
-                    self._protocol_version = saved_creds["protocol_version"]
-                hours_left = saved_creds.get("access_expires_in", 0) // 3600
-                _LOGGER.debug("Using saved credentials (valid for %dh): client_id=%s...", hours_left, self._mqtt_client_id[:30])
-
-        if not saved_creds:
+        if not self._apply_saved_credentials():
             # No saved credentials - need to generate or use static
             if use_dynamic_auth and mac_address:
                 # Generate fresh credentials for new pairing
@@ -243,47 +202,100 @@ class VidaaTV:
                 self._username = username
                 self._password = password
 
-        # Create MQTT client with explicit configuration
-        self._client = mqtt.Client(
+        self._client = self._create_mqtt_client()
+
+    def _create_mqtt_client(self) -> mqtt.Client:
+        """Create an MQTT client configured with the current credentials."""
+        client = mqtt.Client(
             client_id=self._mqtt_client_id,
             clean_session=True,
             protocol=mqtt.MQTTv311,
             transport="tcp",
             **_MQTT_CLIENT_KWARGS,
         )
-        self._client.on_connect = self._on_connect
-        self._client.on_disconnect = self._on_disconnect
-        self._client.on_message = self._on_message
+        client.on_connect = self._on_connect
+        client.on_disconnect = self._on_disconnect
+        client.on_message = self._on_message
+        client.username_pw_set(self._username, self._password)
 
         # Configure SSL with client certificate for mutual TLS
-        if use_ssl:
+        if self.use_ssl:
             # Use provided certs or defaults
-            cert = certfile or (self._CERTS_DIR / DEFAULT_CERT_FILENAME)
-            key = keyfile or (self._CERTS_DIR / DEFAULT_KEY_FILENAME)
+            cert = self._certfile or (self._CERTS_DIR / DEFAULT_CERT_FILENAME)
+            key = self._keyfile or (self._CERTS_DIR / DEFAULT_KEY_FILENAME)
 
             # Check if certificate files exist
             if os.path.exists(cert) and os.path.exists(key):
-                # Using client certs - also need username/password
-                self._client.username_pw_set(self._username, self._password)
-                self._client.tls_set(
+                client.tls_set(
                     ca_certs=None,
                     certfile=str(cert),
                     keyfile=str(key),
                     cert_reqs=ssl.CERT_NONE,
                     tls_version=ssl.PROTOCOL_TLS,
                 )
-                self._client.tls_insecure_set(True)
+                client.tls_insecure_set(True)
             else:
-                # Fallback to basic SSL without client cert - use username/password
-                self._client.username_pw_set(self._username, self._password)
+                # Fallback to basic SSL without client cert
                 context = ssl.create_default_context()
-                if not verify_ssl:
+                if not self.verify_ssl:
                     context.check_hostname = False
                     context.verify_mode = ssl.CERT_NONE
-                self._client.tls_set_context(context)
+                client.tls_set_context(context)
+
+        return client
+
+    def _apply_saved_credentials(self) -> bool:
+        """Use the credentials saved in storage for the MQTT session.
+
+        Called on init and again before every connect, so a long-lived client
+        notices that the stored access token expired (or was refreshed) instead
+        of reusing the password it was created with.
+
+        Returns:
+            True if saved credentials were applied
+        """
+        saved_creds = self._load_saved_credentials()
+        if not saved_creds:
+            return False
+
+        if saved_creds.get("needs_reauth"):
+            # Both tokens expired - need fresh pairing
+            _LOGGER.info("Stored tokens expired. Need to re-authenticate.")
+            return False
+
+        if not (saved_creds.get("needs_refresh") or saved_creds.get("access_token")):
+            return False
+
+        self._mqtt_client_id = saved_creds["client_id"]
+        self._username = saved_creds["mqtt_username"]
+        self.client_id = saved_creds["client_id"]
+        self._refresh_token = saved_creds.get("refresh_token")
+        # Restore auth method from saved credentials
+        if saved_creds.get("auth_method"):
+            self._auth_method = AuthMethod(saved_creds["auth_method"])
+        if saved_creds.get("protocol_version"):
+            self._protocol_version = saved_creds["protocol_version"]
+
+        if saved_creds.get("needs_refresh"):
+            # Access token expired but refresh token valid
+            # Connect with refresh token, then refresh
+            self._password = saved_creds["refresh_token"]
+            self._access_token = None
+            self._authenticated = False
+            self._pending_token_refresh = True
+            hours_left = saved_creds.get("refresh_expires_in", 0) // 3600
+            _LOGGER.info("Access token expired. Will refresh (refresh token valid for %dh)...", hours_left)
         else:
-            # No SSL - use username/password
-            self._client.username_pw_set(self._username, self._password)
+            # Valid access token - use it
+            self._password = saved_creds["access_token"]  # KEY: accesstoken as password!
+            self._access_token = saved_creds["access_token"]
+            self._authenticated = True
+            self._pending_token_refresh = False
+            hours_left = saved_creds.get("access_expires_in", 0) // 3600
+            _LOGGER.debug("Using saved credentials (valid for %dh): client_id=%s...", hours_left, self._mqtt_client_id[:30])
+
+        self._using_saved_credentials = True
+        return True
 
     def _load_saved_credentials(self) -> Optional[dict]:
         """Load saved credentials from storage for reconnection.
@@ -373,6 +385,11 @@ class VidaaTV:
                 pass
             self._connected = False
 
+            # Pick up tokens saved or refreshed since the last connect
+            previous = (self._mqtt_client_id, self._username, self._password)
+            if self._apply_saved_credentials() and previous != (self._mqtt_client_id, self._username, self._password):
+                self._client = self._create_mqtt_client()
+
             self._client.connect(self.host, self.port, keepalive=60)
             self._client.loop_start()
 
@@ -384,7 +401,7 @@ class VidaaTV:
             if not self._connected:
                 # Connection failed - stop loop and try fallback if enabled
                 self._client.loop_stop()
-                if try_fallback and self._protocol_version is None and self.use_dynamic_auth and self.mac_address:
+                if self._should_try_fallback(try_fallback):
                     return self._connect_with_fallback(timeout=timeout, auto_refresh=auto_refresh)
                 return False
 
@@ -403,9 +420,24 @@ class VidaaTV:
             except Exception:
                 pass
             # Try fallback on exception too
-            if try_fallback and self._protocol_version is None and self.use_dynamic_auth and self.mac_address:
+            if self._should_try_fallback(try_fallback):
                 return self._connect_with_fallback(timeout=timeout, auto_refresh=auto_refresh)
             return False
+
+    def _should_try_fallback(self, try_fallback: bool) -> bool:
+        """Whether a failed connection should be retried with other auth methods.
+
+        Saved credentials come from a successful pairing with a known auth
+        method, so regenerating credentials for other methods cannot work and
+        only discards the saved session.
+        """
+        return (
+            try_fallback
+            and not self._using_saved_credentials
+            and self._protocol_version is None
+            and self.use_dynamic_auth
+            and bool(self.mac_address)
+        )
 
     def _connect_with_fallback(self, timeout: float = 10.0, auto_refresh: bool = True) -> bool:
         """Try connecting with different auth methods until one works.
@@ -441,40 +473,9 @@ class VidaaTV:
             self._username = creds.username
             self._password = creds.password
             self.client_id = creds.client_id
+            self._using_saved_credentials = False
 
-            self._client = mqtt.Client(
-                client_id=self._mqtt_client_id,
-                clean_session=True,
-                protocol=mqtt.MQTTv311,
-                transport="tcp",
-                **_MQTT_CLIENT_KWARGS,
-            )
-            self._client.on_connect = self._on_connect
-            self._client.on_disconnect = self._on_disconnect
-            self._client.on_message = self._on_message
-
-            # Reconfigure SSL
-            if self.use_ssl:
-                cert = self._CERTS_DIR / DEFAULT_CERT_FILENAME
-                key = self._CERTS_DIR / DEFAULT_KEY_FILENAME
-                if os.path.exists(cert) and os.path.exists(key):
-                    self._client.username_pw_set(self._username, self._password)
-                    self._client.tls_set(
-                        ca_certs=None,
-                        certfile=str(cert),
-                        keyfile=str(key),
-                        cert_reqs=ssl.CERT_NONE,
-                        tls_version=ssl.PROTOCOL_TLS,
-                    )
-                    self._client.tls_insecure_set(True)
-                else:
-                    self._client.username_pw_set(self._username, self._password)
-                    context = ssl.create_default_context()
-                    context.check_hostname = False
-                    context.verify_mode = ssl.CERT_NONE
-                    self._client.tls_set_context(context)
-            else:
-                self._client.username_pw_set(self._username, self._password)
+            self._client = self._create_mqtt_client()
 
             # Try connecting
             try:
@@ -676,6 +677,8 @@ class VidaaTV:
 
         if access_token:
             self._access_token = access_token
+            if refresh_token:
+                self._refresh_token = refresh_token
             self._authenticated = True
             self._auth_required = False
 
@@ -818,11 +821,43 @@ class VidaaTV:
                 _LOGGER.info("Token refreshed successfully!")
                 # Update password for future reconnections
                 self._password = self._access_token
+                self._client.username_pw_set(self._username, self._password)
                 self._pending_token_refresh = False
                 return True
 
         _LOGGER.warning("Token refresh failed")
         return False
+
+    def ensure_token_fresh(self, min_validity: int = 86400, timeout: float = 10.0) -> bool:
+        """Refresh the access token if it expires within ``min_validity`` seconds.
+
+        The TV can only refresh tokens while it is reachable, so call this
+        periodically while connected to keep the session alive across days
+        when the TV is off.
+
+        Args:
+            min_validity: Refresh when the access token expires sooner than this
+            timeout: Timeout for the refresh response
+
+        Returns:
+            True if the access token is still valid or was refreshed
+        """
+        if not self._storage:
+            return True
+
+        status = self._storage.get_token_status(
+            device_id=self.mac_address,
+            host=self.host,
+            port=self.port,
+        )
+        if not status.get("has_token"):
+            return True
+        if status.get("access_valid") and status.get("access_expires_in", 0) > min_validity:
+            return True
+        if not status.get("refresh_valid"):
+            return False
+
+        return self.refresh_token(timeout=timeout)
 
     def start_pairing(self) -> bool:
         """Start the pairing process to show PIN on TV.
